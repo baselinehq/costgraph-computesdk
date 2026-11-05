@@ -156,7 +156,7 @@ const sandbox = await cg.instances.create({ provider: 'e2b', templateId: 'agent-
 
 Only these are sent to CostGraph:
 
-- your CostGraph API key, in the `Authorization` header
+- your CostGraph API key, in the `X-API-Key` header
 - the names of your providers, such as `e2b` and `daytona`
 - the size class of each create, or the vCPUs and memory a provider actually received when its nearest size is larger
 - for each sandbox: provider name, sandbox ID, start and stop times, and the routing decision ID
@@ -174,7 +174,7 @@ Choose a provider:
 
 ```sh
 curl https://api.costgraph.ai/api/v1/tenant/sandboxes/route \
-  -H "Authorization: Bearer $COSTGRAPH_API_KEY" \
+  -H "X-API-Key: $COSTGRAPH_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"size_class": "md", "providers": ["e2b", "daytona"]}'
 ```
@@ -197,7 +197,7 @@ Report sandboxes starting and stopping, up to 100 events per call:
 
 ```sh
 curl https://api.costgraph.ai/api/v1/tenant/sandboxes/events \
-  -H "Authorization: Bearer $COSTGRAPH_API_KEY" \
+  -H "X-API-Key: $COSTGRAPH_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "events": [

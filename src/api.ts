@@ -47,7 +47,7 @@ export class CostGraphApi {
 
   private async send(path: string, body: unknown, signal: AbortSignal): Promise<Response> {
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.config.apiKey}`,
+      'X-API-Key': this.config.apiKey,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     };
