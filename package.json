@@ -1,0 +1,51 @@
+{
+  "name": "@costgraph/computesdk",
+  "version": "0.1.0",
+  "description": "A ComputeSDK provider that sends each sandbox to the cheapest of your providers for its size and reports cost per agent, run and customer to CostGraph.",
+  "license": "MIT",
+  "author": "BaselineHQ",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "computesdk",
+    "sandbox",
+    "costgraph",
+    "cost",
+    "routing"
+  ],
+  "peerDependencies": {
+    "computesdk": "^4.1.15"
+  },
+  "devDependencies": {
+    "computesdk": "4.1.15",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3"
+  }
+}
