@@ -30,7 +30,6 @@ compute.setConfig({
 });
 
 const sandbox = await compute.instances.create({
-  sizeClass: 'md',
   metadata: { agent: 'researcher', run: runId, customer: tenantId },
 });
 ```
@@ -59,8 +58,8 @@ A sandbox that ends without `destroy()`, for example when the vendor's own timeo
 
 ## How a provider is chosen
 
-- With `sizeClass`, CostGraph picks the cheapest of your providers that supports that size. A provider supports a size when its ComputeSDK adapter maps that size class. If none of your providers maps it, `create()` throws the same `InstanceSizeError` that ComputeSDK throws without CostGraph.
-- Without `sizeClass`, CostGraph picks among all your providers.
+- With `sizeClass`, CostGraph picks the cheapest of your providers that supports that size. A provider supports a size when its ComputeSDK adapter maps that size class; not every adapter does yet. If none of your providers maps it, `create()` throws the same `InstanceSizeError` that ComputeSDK throws without CostGraph.
+- Without `sizeClass`, each provider creates its own default size, so prices are not comparable. The sandbox goes to the first provider in your list, and CostGraph still records its start and stop.
 - A create waits at most `routeTimeoutMs` (300 ms by default) for an answer. If CostGraph is slow, unreachable or returns an error, the sandbox is created in the order of your `providers` list, as ComputeSDK does today. CostGraph problems never make a create fail.
 - Answers are reused for `cacheTtlMs` (5 minutes by default) per size class and provider list, so most creates make no extra call.
 - If the chosen provider fails, the next one is tried only when ComputeSDK would try it: never for a create with `sizeClass`, never after an abort, never for an error the provider marks as not safe to retry, and never when `fallbackOnError` is `false`. Otherwise the next provider in CostGraph's order is tried, followed by any of your providers that the answer did not list.
@@ -128,7 +127,7 @@ curl https://api.costgraph.ai/api/v1/tenant/sandboxes/route \
 }
 ```
 
-Try the providers in `order`. Leave out `size_class` to choose among all providers. Use a short timeout and fall back to your own order if the call fails.
+Try the providers in `order`. Without `size_class` (or `vcpus` and `memory_mib`), `order` is your own list and `reason` is `no_size`. Use a short timeout and fall back to your own order if the call fails.
 
 Report sandboxes starting and stopping, up to 100 events per call:
 
