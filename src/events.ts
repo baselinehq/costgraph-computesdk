@@ -21,8 +21,12 @@ export interface StartedEvent {
   readonly at: string;
   readonly decision_id?: string;
   readonly size_class?: InstanceSizeClass;
+  readonly vcpus?: number;
+  readonly memory_mib?: number;
   readonly metadata?: Readonly<Record<string, string>>;
 }
+
+export type StartedSize = Pick<StartedEvent, 'size_class' | 'vcpus' | 'memory_mib'>;
 
 export interface StoppedEvent {
   readonly type: 'stopped';

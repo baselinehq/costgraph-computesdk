@@ -58,7 +58,7 @@ A sandbox that ends without `destroy()`, for example when the vendor's own timeo
 
 ## How a provider is chosen
 
-- With `sizeClass`, CostGraph picks the cheapest of your providers that supports that size. A provider supports a size when its ComputeSDK adapter maps that size class; not every adapter does yet. If none of your providers maps it, `create()` throws the same `InstanceSizeError` that ComputeSDK throws without CostGraph.
+- With `sizeClass`, CostGraph picks the cheapest of your providers that supports that size (see [Sizes](#sizes)). If none of your providers supports it, `create()` throws the same `InstanceSizeError` that ComputeSDK throws without CostGraph.
 - Without `sizeClass`, each provider creates its own default size, so prices are not comparable. The sandbox goes to the first provider in your list, and CostGraph still records its start and stop.
 - A create waits at most `routeTimeoutMs` (300 ms by default) for an answer. If CostGraph is slow, unreachable or returns an error, the sandbox is created in the order of your `providers` list, as ComputeSDK does today. CostGraph problems never make a create fail.
 - Answers are reused for `cacheTtlMs` (5 minutes by default) per size class and provider list, so most creates make no extra call.
@@ -72,6 +72,70 @@ A sandbox that ends without `destroy()`, for example when the vendor's own timeo
 
 ```ts
 const sandbox = await cg.instances.create({ provider: 'e2b', metadata: { agent: 'researcher' } });
+```
+
+## Sizes
+
+`sizeClass` asks for one of ComputeSDK's standard sizes:
+
+| Size | vCPUs | Memory |
+|---|---|---|
+| `xs` | 1 | 1 GiB |
+| `sm` | 1 | 2 GiB |
+| `md` | 2 | 4 GiB |
+| `lg` | 4 | 8 GiB |
+| `xl` | 8 | 16 GiB |
+| `2xl` | 16 | 32 GiB |
+
+```ts
+import { compute } from 'computesdk';
+import { modal } from '@computesdk/modal';
+import { vercel } from '@computesdk/vercel';
+import { costgraph } from '@costgraph/computesdk';
+
+compute.setConfig({
+  provider: costgraph({
+    apiKey: process.env.COSTGRAPH_API_KEY,
+    providers: [
+      modal({ tokenId: MODAL_TOKEN_ID, tokenSecret: MODAL_TOKEN_SECRET }),
+      vercel({ token: VERCEL_TOKEN, teamId: VERCEL_TEAM_ID, projectId: VERCEL_PROJECT_ID }),
+    ],
+  }),
+});
+
+const sandbox = await compute.instances.create({
+  sizeClass: 'md',
+  metadata: { agent: 'researcher', run: runId, customer: tenantId },
+});
+```
+
+A provider supports a size in one of two ways:
+
+- **Native.** The ComputeSDK adapter maps sizes itself, as Archil and Namespace do. The size goes to the adapter unchanged.
+- **Mapped.** The adapter does not map sizes yet, but the vendor accepts CPU and memory for each new sandbox. CostGraph turns the size into that vendor's own create options, following the vendor's documented values:
+
+| Provider | Sizes | Create options |
+|---|---|---|
+| Beam | `xs` to `xl` | `cpu`, `memory` |
+| Daytona | `xs` to `lg`, only with `image` | `resources.cpu`, `resources.memory` |
+| Modal | `xs` to `2xl` | `cpu` and `cpuLimit` (physical cores, two vCPUs each), `memoryMiB` |
+| Northflank | `xs` to `2xl` | `deploymentPlan` (`nf-compute-100-1` to `nf-compute-1600-32`) |
+| Runloop | `xs` to `2xl` | `launch_parameters.resource_size_request`, with a custom size from `lg` up |
+| Vercel | `xs` to `xl` | `resources.vcpus` |
+
+- Runloop and Vercel have no 1 vCPU / 1 GiB size, so for `xs` they create their smallest size, 1 vCPU with 2 GiB. They are used for `xs` only when none of your other providers creates exactly 1 vCPU / 1 GiB, and CostGraph records the size they created, not `xs`.
+- Daytona accepts CPU and memory only for sandboxes built from an image, so pass `image` (for example `image: 'python:3.12'`) together with `sizeClass`. Without `image`, or with `snapshotId` or `templateId`, Daytona does not take part in sized creates. `xl` and `2xl` are above Daytona's default limit of 4 vCPUs and 8 GiB.
+- Vercel allows 16 vCPUs only on Enterprise plans, so `2xl` is not sent to Vercel.
+- ComputeSDK does not allow CPU or memory options such as `cpu`, `memory`, `resources`, `launch_parameters` or `deploymentPlan` next to `sizeClass`. Other options you pass are kept as they are.
+
+### E2B
+
+E2B fixes CPU and memory per template, not per sandbox, so E2B does not take part in creates with `sizeClass`. To run E2B sandboxes at a given size, build a template with that size using E2B's SDK, then create from it by name without `sizeClass`. CostGraph records these sandboxes without a size, so they are not routed or compared by size:
+
+```ts
+await Template.build(template, 'agent-md', { cpuCount: 2, memoryMB: 4096 });
+
+const sandbox = await cg.instances.create({ provider: 'e2b', templateId: 'agent-md', metadata: { agent: 'researcher' } });
 ```
 
 ## Options
@@ -94,7 +158,7 @@ Only these are sent to CostGraph:
 
 - your CostGraph API key, in the `Authorization` header
 - the names of your providers, such as `e2b` and `daytona`
-- the size class of each create
+- the size class of each create, or the vCPUs and memory a provider actually received when its nearest size is larger
 - for each sandbox: provider name, sandbox ID, start and stop times, and the routing decision ID
 - the `metadata` you pass to `create()`: string values only, at most 20 keys, keys up to 64 bytes, values cut to 256 bytes
 
@@ -150,6 +214,8 @@ curl https://api.costgraph.ai/api/v1/tenant/sandboxes/events \
     ]
   }'
 ```
+
+When a sandbox's size is not one of the standard sizes, send `vcpus` and `memory_mib` in the `started` event instead of `size_class`.
 
 Add `-H "X-CostGraph-Tenant-ID: <tenant>"` to either call to act for a specific tenant.
 

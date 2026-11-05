@@ -4,6 +4,7 @@ import {
   assertInstanceSizeSupported,
   getInstanceSizeProfile,
   hasInstanceSizeRequest,
+  isInstanceSizeManager,
   validateInstanceSizeOptions,
   type CreateInstanceOptions,
   type CreateVolumeOptions,
@@ -17,8 +18,9 @@ import {
   type Volume,
 } from 'computesdk';
 import { CostGraphApi, errorMessage, type FetchFunction } from './api.js';
-import { EventReporter, sanitizeMetadata } from './events.js';
+import { EventReporter, sanitizeMetadata, type StartedSize } from './events.js';
 import { Router, orderByDecision, type RouteDecision } from './router.js';
+import { applySizeOptions, isExactSize, mapSize, type SupportedSizeMapping } from './sizes.js';
 
 const PROVIDER_NAME = 'costgraph';
 const DEFAULT_BASE_URL = 'https://api.costgraph.ai';
@@ -68,6 +70,12 @@ interface WrappedProvider {
   readonly name: string;
   readonly provider: DirectProvider;
   readonly instances: InstanceManager;
+}
+
+/** Without a mapping the provider creates the size itself, or the create has no size. */
+interface CreateTarget {
+  readonly provider: WrappedProvider;
+  readonly sizeMapping?: SupportedSizeMapping;
 }
 
 const UNRESOLVED_SIZE_STATUSES: ReadonlySet<string> = new Set<UnresolvedSizeStatus>([
@@ -146,27 +154,31 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     const pinned =
       typeof requestedName === 'string' ? this.providerNamed(requestedName) : this.ownerOfReferencedResources(createOptions);
     const pool = pinned ? [pinned] : this.providers;
-    const eligible = sizeClass === undefined ? pool : supportingSize(pool, sizeClass, createOptions);
-    const decision =
-      eligible.length > 1 ? await this.router?.route(sizeClass, eligible.map((provider) => provider.name)) : undefined;
-    const ordered = orderByDecision(eligible.map((provider) => provider.name), decision?.order).map((name) =>
-      this.providerNamed(name),
-    );
+    const eligible: CreateTarget[] =
+      sizeClass === undefined
+        ? pool.map((provider) => ({ provider }))
+        : preferExactSizes(supportingSize(pool, sizeClass, createOptions), sizeClass);
+    const names = eligible.map((target) => target.provider.name);
+    const decision = eligible.length > 1 ? await this.router?.route(sizeClass, names) : undefined;
+    const targets = new Map(eligible.map((target) => [target.provider.name, target]));
+    const ordered = orderByDecision(names, decision?.order).flatMap((name) => targets.get(name) ?? []);
     // Mirrors ComputeSDK: a pinned provider or a defined sizeClass never reroutes after a create attempt.
     const canReroute = this.fallbackOnError && pinned === undefined && sizeClass === undefined;
     const failures: Array<{ provider: WrappedProvider; error: unknown }> = [];
 
-    for (const target of ordered) {
+    for (const { provider: target, sizeMapping } of ordered) {
       let instance: InstanceInterface;
       try {
-        instance = await target.instances.create(createOptions);
+        instance = await target.instances.create(
+          sizeMapping ? applySizeOptions(createOptions, sizeMapping) : createOptions,
+        );
         assertEgressHonored(instance, target, createOptions);
       } catch (error) {
         if (!canReroute || !mayReroute(error)) throw error;
         failures.push({ provider: target, error });
         continue;
       }
-      return this.adopt(instance, target, decision, sizeClass, createOptions.metadata);
+      return this.adopt(instance, target, decision, startedSize(sizeClass, sizeMapping), createOptions.metadata);
     }
 
     throw new AggregateError(
@@ -348,7 +360,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     instance: InstanceInterface,
     owner: WrappedProvider,
     decision: RouteDecision | undefined,
-    sizeClass: InstanceSizeClass | undefined,
+    size: StartedSize,
     metadata: unknown,
   ): InstanceInterface {
     try {
@@ -361,7 +373,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
         sandbox_id: instanceId,
         at: new Date().toISOString(),
         decision_id: decision?.decisionId,
-        size_class: sizeClass,
+        ...size,
         metadata: sanitizeMetadata(metadata),
       });
       return this.track(instance, owner);
@@ -433,7 +445,10 @@ function wrapProviders(providers: readonly DirectProvider[]): WrappedProvider[] 
   });
 }
 
-/** Supported when any wrapped provider declares an exact mapping; the chosen provider applies its own native options. */
+/**
+ * Supported when any wrapped provider maps the size itself or CostGraph maps it to that vendor's own options.
+ * ComputeSDK accepts only a resolution equal to the request, so a larger vendor tier is reported in the started event instead.
+ */
 function combinedSizeManager(providers: readonly WrappedProvider[]): InstanceSizeManager {
   const resolve = (sizeClass: InstanceSizeClass, options?: CreateInstanceOptions): InstanceSizeResolution => {
     if (options?.sizeClass !== undefined && options.sizeClass !== sizeClass) {
@@ -445,7 +460,11 @@ function combinedSizeManager(providers: readonly WrappedProvider[]): InstanceSiz
     contract: 'computesdk.instance-sizes.v1' as const,
     resolve,
     list: (options?: CreateInstanceOptions) =>
-      Object.freeze(Object.values(INSTANCE_SIZE_PROFILES).map((profile) => resolve(profile.sizeClass, options))),
+      Object.freeze(
+        Object.values(INSTANCE_SIZE_PROFILES).map((profile) =>
+          resolve(profile.sizeClass, options ? { ...options, sizeClass: undefined } : undefined),
+        ),
+      ),
   });
 }
 
@@ -453,7 +472,7 @@ function supportingSize(
   providers: readonly WrappedProvider[],
   sizeClass: InstanceSizeClass,
   options: CreateInstanceOptions,
-): readonly WrappedProvider[] {
+): CreateTarget[] {
   const { supported, resolution } = resolveAcross(providers, sizeClass, options);
   if (resolution.status !== 'supported') throw new InstanceSizeError(resolution.status, resolution.reason, resolution);
   return supported;
@@ -463,20 +482,27 @@ function resolveAcross(
   providers: readonly WrappedProvider[],
   sizeClass: InstanceSizeClass,
   options?: CreateInstanceOptions,
-): { supported: WrappedProvider[]; resolution: InstanceSizeResolution } {
+): { supported: CreateTarget[]; resolution: InstanceSizeResolution } {
   const requested = getInstanceSizeProfile(sizeClass);
   const request = { ...options, sizeClass };
-  const supported: WrappedProvider[] = [];
+  const supported: CreateTarget[] = [];
   const refusals: Array<{ provider: WrappedProvider; status: UnresolvedSizeStatus; reason: string }> = [];
 
   for (const provider of providers) {
     try {
       assertInstanceSizeSupported(provider.provider, request);
-      supported.push(provider);
+      supported.push({ provider });
     } catch (error) {
       if (!(error instanceof InstanceSizeError) || !isUnresolvedStatus(error.code)) throw error;
-      const reason = error.resolution && 'reason' in error.resolution ? error.resolution.reason : error.message;
-      refusals.push({ provider, status: error.code, reason: reason.replace(/^sizeClass: /, '') });
+      const sizeMapping = hasNoSizeMapping(provider, error) ? mapSize(provider.name, requested, request) : undefined;
+      if (sizeMapping?.status === 'supported') {
+        supported.push({ provider, sizeMapping });
+        continue;
+      }
+      const reason =
+        sizeMapping?.reason ??
+        (error.resolution && 'reason' in error.resolution ? error.resolution.reason : error.message);
+      refusals.push({ provider, status: sizeMapping?.status ?? error.code, reason: reason.replace(/^sizeClass: /, '') });
     }
   }
 
@@ -501,6 +527,29 @@ function resolveAcross(
       reason: refusals.map(({ provider, reason }) => `${provider.name}: ${reason}`).join('; '),
     }),
   };
+}
+
+/** CostGraph's own mapping never replaces a mapping the adapter declares, even an invalid one. */
+function hasNoSizeMapping(provider: WrappedProvider, error: InstanceSizeError): boolean {
+  if (!isInstanceSizeManager(provider.provider.sizes)) return true;
+  return error.resolution !== undefined && error.resolution.status === 'unknown';
+}
+
+/**
+ * CostGraph prices every candidate at the requested size, so a vendor whose smallest fitting tier is larger
+ * would look cheaper than it runs. It is only a candidate when no provider creates the exact size.
+ */
+function preferExactSizes(targets: CreateTarget[], sizeClass: InstanceSizeClass): CreateTarget[] {
+  const requested = getInstanceSizeProfile(sizeClass);
+  const exact = targets.filter(({ sizeMapping }) => !sizeMapping || isExactSize(sizeMapping, requested));
+  return exact.length > 0 ? exact : targets;
+}
+
+/** CostGraph prefers size_class over vcpus and memory_mib, so a larger vendor tier is never reported as the requested size. */
+function startedSize(sizeClass: InstanceSizeClass | undefined, sizeMapping: SupportedSizeMapping | undefined): StartedSize {
+  if (sizeClass === undefined) return {};
+  if (!sizeMapping || isExactSize(sizeMapping, getInstanceSizeProfile(sizeClass))) return { size_class: sizeClass };
+  return { vcpus: sizeMapping.vcpus, memory_mib: sizeMapping.memoryMiB };
 }
 
 function isUnresolvedStatus(code: string): code is UnresolvedSizeStatus {
