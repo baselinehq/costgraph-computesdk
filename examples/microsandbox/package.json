@@ -1,0 +1,16 @@
+{
+  "name": "costgraph-computesdk-microsandbox-example",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file=.env index.js"
+  },
+  "dependencies": {
+    "@computesdk/microsandbox": "0.1.24",
+    "@costgraph/computesdk": "0.0.2",
+    "computesdk": "4.1.15"
+  }
+}
