@@ -1,5 +1,5 @@
 {
-  "name": "@costgraph/computesdk",
+  "name": "@baselinehq/computesdk",
   "version": "1.0.0",
   "description": "A ComputeSDK provider that sends each sandbox to the cheapest of your providers for its size and reports cost per agent, run and customer to CostGraph.",
   "license": "MIT",

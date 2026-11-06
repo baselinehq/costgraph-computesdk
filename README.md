@@ -1,4 +1,4 @@
-# @costgraph/computesdk
+# @baselinehq/computesdk
 
 A [ComputeSDK](https://github.com/computesdk/computesdk) provider that sends each new sandbox to the cheapest of your providers for its size, and reports each sandbox's start and stop to CostGraph so you can see sandbox cost per agent, run and customer.
 
@@ -7,7 +7,7 @@ You keep your own vendor accounts and keys. They stay in your process and are ne
 ## Install
 
 ```sh
-npm install @costgraph/computesdk computesdk
+npm install @baselinehq/computesdk computesdk
 ```
 
 Requires `computesdk` 4.1.15 or later, Node.js 18 or later, or any runtime with a global `fetch`.
@@ -20,7 +20,7 @@ Move your providers inside `costgraph()`. Every other ComputeSDK call stays the 
 import { compute } from 'computesdk';
 import { e2b } from '@computesdk/e2b';
 import { daytona } from '@computesdk/daytona';
-import { costgraph } from '@costgraph/computesdk';
+import { costgraph } from '@baselinehq/computesdk';
 
 compute.setConfig({
   provider: costgraph({
@@ -91,7 +91,7 @@ const sandbox = await cg.instances.create({ provider: 'e2b', metadata: { agent: 
 import { compute } from 'computesdk';
 import { modal } from '@computesdk/modal';
 import { vercel } from '@computesdk/vercel';
-import { costgraph } from '@costgraph/computesdk';
+import { costgraph } from '@baselinehq/computesdk';
 
 compute.setConfig({
   provider: costgraph({
