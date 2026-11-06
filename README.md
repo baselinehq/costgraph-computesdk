@@ -30,7 +30,7 @@ compute.setConfig({
 });
 
 const sandbox = await compute.instances.create({
-  metadata: { agent: 'researcher', run: runId, customer: tenantId },
+  metadata: { agent: 'researcher', run: runId, customer: customerId },
 });
 ```
 
@@ -105,7 +105,7 @@ compute.setConfig({
 
 const sandbox = await compute.instances.create({
   sizeClass: 'md',
-  metadata: { agent: 'researcher', run: runId, customer: tenantId },
+  metadata: { agent: 'researcher', run: runId, customer: customerId },
 });
 ```
 
