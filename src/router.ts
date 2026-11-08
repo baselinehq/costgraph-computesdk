@@ -1,5 +1,5 @@
 import type { InstanceSizeClass } from 'computesdk';
-import { CostGraphApiError, readData, type CostGraphApi } from './api.js';
+import { CostGraphApiError, isRecord, readData, type CostGraphApi } from './api.js';
 
 const ROUTE_PATH = '/api/v1/tenant/sandboxes/route';
 const ROUTE_REQUEST_TIMEOUT_MS = 5_000;
@@ -8,6 +8,7 @@ const FAILURE_TTL_MS = 30_000;
 export interface RouteDecision {
   readonly decisionId?: string;
   readonly order: readonly string[];
+  readonly exceededBudget?: string;
 }
 
 interface CachedAnswer {
@@ -18,6 +19,7 @@ interface CachedAnswer {
 export class Router {
   private readonly cache = new Map<string, CachedAnswer>();
   private readonly inflight = new Map<string, Promise<RouteDecision | undefined>>();
+  private enforcedBudget = false;
 
   constructor(
     private readonly api: CostGraphApi,
@@ -26,8 +28,12 @@ export class Router {
     private readonly reportError: (error: unknown) => void,
   ) {}
 
+  get enforcesBudget(): boolean {
+    return this.enforcedBudget;
+  }
+
   /**
-   * Never rejects and never waits longer than the route timeout. Undefined means "use the team's list order".
+   * Never rejects. Waits at most the route timeout, or the request timeout while the team enforces a budget. Undefined means no answer.
    * A slow answer keeps loading after the caller gives up so the next create can use it from the cache.
    */
   async route(sizeClass: InstanceSizeClass | undefined, providers: readonly string[]): Promise<RouteDecision | undefined> {
@@ -36,12 +42,13 @@ export class Router {
     if (cached && cached.expiresAt > Date.now()) return cached.decision;
     if (cached) this.cache.delete(key);
 
+    const waitMs = this.enforcedBudget ? Math.max(this.timeoutMs, ROUTE_REQUEST_TIMEOUT_MS) : this.timeoutMs;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const gaveUp = new Promise<undefined>((resolve) => {
       timer = setTimeout(() => {
-        this.reportError(new CostGraphApiError(`no routing answer within ${this.timeoutMs}ms; using list order`));
+        this.reportError(new CostGraphApiError(`no routing answer within ${waitMs}ms`));
         resolve(undefined);
-      }, this.timeoutMs);
+      }, waitMs);
     });
     try {
       return await Promise.race([this.request(key, sizeClass, providers), gaveUp]);
@@ -61,10 +68,15 @@ export class Router {
     const body = sizeClass === undefined ? { providers } : { size_class: sizeClass, providers };
     const request = this.api
       .post(ROUTE_PATH, body, Math.max(this.timeoutMs, ROUTE_REQUEST_TIMEOUT_MS), readData)
-      .then(parseDecision)
+      .then((data) => {
+        this.recordBudgetEnforcement(data);
+        return parseDecision(data);
+      })
       .then(
         (decision) => {
-          this.cache.set(key, { decision, expiresAt: Date.now() + this.cacheTtlMs });
+          if (decision.exceededBudget === undefined) {
+            this.cache.set(key, { decision, expiresAt: Date.now() + this.cacheTtlMs });
+          }
           return decision;
         },
         (error: unknown) => {
@@ -77,11 +89,18 @@ export class Router {
     this.inflight.set(key, request);
     return request;
   }
+
+  private recordBudgetEnforcement(data: unknown): void {
+    if (isRecord(data) && typeof data.enforced_budget === 'boolean') this.enforcedBudget = data.enforced_budget;
+  }
 }
 
 function parseDecision(data: unknown): RouteDecision {
-  if (data === null || typeof data !== 'object') throw new CostGraphApiError('route response data is not an object');
-  const { decision_id: decisionId, provider, order } = data as Record<string, unknown>;
+  if (!isRecord(data)) throw new CostGraphApiError('route response data is not an object');
+  const { decision_id: decisionId, provider, order, reason, budget_name: budgetName } = data;
+  if (reason === 'budget_exceeded') {
+    return { order: [], exceededBudget: typeof budgetName === 'string' ? budgetName : '' };
+  }
   const names = Array.isArray(order) ? order.filter((name): name is string => typeof name === 'string') : [];
   if (names.length === 0 && typeof provider === 'string') names.push(provider);
   if (names.length === 0) throw new CostGraphApiError('route response names no provider');

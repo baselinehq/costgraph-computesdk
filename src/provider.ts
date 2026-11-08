@@ -183,7 +183,15 @@ class CostGraphRoutingProvider implements CostGraphProvider {
         ? pool.map((provider) => ({ provider }))
         : preferExactSizes(supportingSize(pool, sizeClass, createOptions), sizeClass);
     const names = eligible.map((target) => target.provider.name);
-    const decision = eligible.length > 1 ? await this.router?.route(sizeClass, names) : undefined;
+    const decision =
+      eligible.length > 1 || this.router?.enforcesBudget ? await this.router?.route(sizeClass, names) : undefined;
+    if (decision?.exceededBudget !== undefined) {
+      const budget = decision.exceededBudget ? `budget "${decision.exceededBudget}"` : 'budget';
+      throw new Error(`The team's ${budget} is over, so no sandbox was created`);
+    }
+    if (decision === undefined && this.router?.enforcesBudget) {
+      throw new Error("CostGraph could not check the team's budget, so no sandbox was created");
+    }
     const targets = new Map(eligible.map((target) => [target.provider.name, target]));
     const ordered = orderByDecision(names, decision?.order).flatMap((name) => targets.get(name) ?? []);
     // Mirrors ComputeSDK: a pinned provider or a defined sizeClass never reroutes after a create attempt.
