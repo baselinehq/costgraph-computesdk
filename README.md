@@ -71,7 +71,7 @@ const run = cg.runKey(sandbox.instanceId);
 
 ## Run on your team's CostGraph connections
 
-When the sandbox accounts are connected on CostGraph's Integrations page, `costgraphConnections()` runs sandboxes on them without any vendor key in your process. Use it when you build for a team that connected its own accounts, with an API key or a Sign in with CostGraph access token that carries the `sandbox:run` scope.
+When the sandbox accounts are connected on CostGraph's Integrations page, `costgraphConnections()` runs sandboxes on them without any vendor key in your process. Use it when you build for a team that connected its own accounts, with an API key that carries the `sandbox:run` scope, or a Sign in with CostGraph access token that can use the CostGraph MCP tools.
 
 ```ts
 import { compute } from 'computesdk';
@@ -99,7 +99,7 @@ await sandbox.destroy();
 | Option | Default | Description |
 |---|---|---|
 | `apiKey` | none | A CostGraph API key with the `sandbox:run` scope. Set this or `accessToken`. |
-| `accessToken` | none | A Sign in with CostGraph access token, sent as `Authorization: Bearer`. |
+| `accessToken` | none | A Sign in with CostGraph access token that can use the CostGraph MCP tools, sent as `Authorization: Bearer`. |
 | `baseUrl` | `https://api.costgraph.ai` | CostGraph API address. |
 | `tenantId` | none | Sent as the `X-CostGraph-Tenant-ID` header. |
 | `policy` | team policy | `cheapest`, `balanced` or `fastest` for these sandboxes. |
