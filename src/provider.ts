@@ -168,6 +168,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     const tags = sanitizeMetadata(createOptions.metadata);
 
     for (const { provider: target, sizeMapping } of ordered) {
+      const requestedAt = new Date().toISOString();
       let instance: InstanceInterface;
       try {
         instance = await target.instances
@@ -182,7 +183,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
         failures.push({ provider: target, error });
         continue;
       }
-      return this.adopt(instance, target, decision, startedSize(sizeClass, sizeMapping), tags);
+      return this.adopt(instance, target, decision, startedSize(sizeClass, sizeMapping), tags, requestedAt);
     }
 
     throw new AggregateError(
@@ -366,6 +367,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     decision: RouteDecision | undefined,
     size: StartedSize,
     tags: Record<string, string> | undefined,
+    requestedAt: string,
   ): InstanceInterface {
     try {
       const instanceId = instanceIdOf(instance);
@@ -376,6 +378,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
         provider: owner.name,
         sandbox_id: instanceId,
         at: new Date().toISOString(),
+        create_requested_at: requestedAt,
         decision_id: decision?.decisionId,
         ...size,
         metadata: tags,

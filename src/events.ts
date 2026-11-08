@@ -20,6 +20,7 @@ export interface StartedEvent {
   readonly provider: string;
   readonly sandbox_id: string;
   readonly at: string;
+  readonly create_requested_at: string;
   readonly decision_id?: string;
   readonly size_class?: InstanceSizeClass;
   readonly vcpus?: number;

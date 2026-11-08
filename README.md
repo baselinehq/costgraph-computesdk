@@ -196,7 +196,7 @@ Only these are sent to CostGraph:
 - your CostGraph API key, in the `X-API-Key` header
 - the names of your providers, such as `e2b` and `daytona`
 - the size class of each create, or the vCPUs and memory a provider actually received when its nearest size is larger
-- for each sandbox: provider name, sandbox ID, start and stop times, and the routing decision ID
+- for each sandbox: provider name, sandbox ID, the time the create was sent to the provider, start and stop times, and the routing decision ID
 - for each create a provider refuses: provider name, time, failure class and the provider's error message, cut to 2,000 bytes
 - the `metadata` you pass to `create()`: string values only, at most 20 keys, keys up to 64 bytes, values cut to 256 bytes
 
@@ -244,6 +244,7 @@ curl https://api.costgraph.ai/api/v1/tenant/sandboxes/events \
         "provider": "daytona",
         "sandbox_id": "sbx_123",
         "at": "2026-11-05T12:00:00Z",
+        "create_requested_at": "2026-11-05T11:59:58Z",
         "decision_id": "6f1c2a9e-0b7d-4c41-9a53-2f7f4f0f9b11",
         "size_class": "md",
         "metadata": { "agent": "researcher", "run": "run-42", "customer": "acme" }
@@ -261,7 +262,7 @@ curl https://api.costgraph.ai/api/v1/tenant/sandboxes/events \
   }'
 ```
 
-A `failed` event needs no `sandbox_id`.
+`create_requested_at` is when the create was sent to the provider, so CostGraph can measure how long the provider took to start it. A `failed` event needs no `sandbox_id`.
 
 When a sandbox's size is not one of the standard sizes, send `vcpus` and `memory_mib` in the `started` event instead of `size_class`.
 
