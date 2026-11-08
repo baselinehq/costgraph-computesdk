@@ -13,24 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  route:
-    runs-on: ubuntu-slim
-    timeout-minutes: 2
-    permissions:
-      contents: read
-      id-token: write
-    outputs:
-      runners: ${{ steps.route.outputs.runners }}
-    steps:
-      - id: route
-        uses: baselinehq/costgraph-action/route@v0
-        with:
-          default: ubuntu-latest
-
   check:
-    needs: [route]
-    if: ${{ !cancelled() }}
-    runs-on: ${{ fromJSON(needs.route.outputs.runners || '{}').check || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
