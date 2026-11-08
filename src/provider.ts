@@ -17,13 +17,13 @@ import {
   type ListVolumesOptions,
   type Volume,
 } from 'computesdk';
-import { CostGraphApi, errorMessage, type FetchFunction } from './api.js';
-import { EventReporter, sanitizeMetadata, type StartedSize } from './events.js';
+import { CostGraphApi, errorMessage, isRecord, type FetchFunction } from './api.js';
+import { EventReporter, classifyFailure, failureDetail, sanitizeMetadata, type StartedSize } from './events.js';
 import { Router, orderByDecision, type RouteDecision } from './router.js';
 import { applySizeOptions, isExactSize, mapSize, type SupportedSizeMapping } from './sizes.js';
 
-const PROVIDER_NAME = 'costgraph';
-const DEFAULT_BASE_URL = 'https://api.costgraph.ai';
+export const PROVIDER_NAME = 'costgraph';
+export const DEFAULT_BASE_URL = 'https://api.costgraph.ai';
 const DEFAULT_ROUTE_TIMEOUT_MS = 300;
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 
@@ -165,20 +165,24 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     // Mirrors ComputeSDK: a pinned provider or a defined sizeClass never reroutes after a create attempt.
     const canReroute = this.fallbackOnError && pinned === undefined && sizeClass === undefined;
     const failures: Array<{ provider: WrappedProvider; error: unknown }> = [];
+    const tags = sanitizeMetadata(createOptions.metadata);
 
     for (const { provider: target, sizeMapping } of ordered) {
       let instance: InstanceInterface;
       try {
-        instance = await target.instances.create(
-          sizeMapping ? applySizeOptions(createOptions, sizeMapping) : createOptions,
-        );
+        instance = await target.instances
+          .create(sizeMapping ? applySizeOptions(createOptions, sizeMapping) : createOptions)
+          .catch((error: unknown) => {
+            this.recordFailure(target, decision, error, tags);
+            throw error;
+          });
         assertEgressHonored(instance, target, createOptions);
       } catch (error) {
         if (!canReroute || !mayReroute(error)) throw error;
         failures.push({ provider: target, error });
         continue;
       }
-      return this.adopt(instance, target, decision, startedSize(sizeClass, sizeMapping), createOptions.metadata);
+      return this.adopt(instance, target, decision, startedSize(sizeClass, sizeMapping), tags);
     }
 
     throw new AggregateError(
@@ -361,7 +365,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     owner: WrappedProvider,
     decision: RouteDecision | undefined,
     size: StartedSize,
-    metadata: unknown,
+    tags: Record<string, string> | undefined,
   ): InstanceInterface {
     try {
       const instanceId = instanceIdOf(instance);
@@ -374,7 +378,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
         at: new Date().toISOString(),
         decision_id: decision?.decisionId,
         ...size,
-        metadata: sanitizeMetadata(metadata),
+        metadata: tags,
       });
       return this.track(instance, owner);
     } catch (error) {
@@ -385,7 +389,35 @@ class CostGraphRoutingProvider implements CostGraphProvider {
 
   private recordStop(owner: WrappedProvider, instanceId: string): void {
     this.instanceOwners.delete(instanceId);
-    this.events?.push({ type: 'stopped', provider: owner.name, sandbox_id: instanceId, at: new Date().toISOString() });
+    this.events?.push({
+      type: 'stopped',
+      provider: owner.name,
+      sandbox_id: instanceId,
+      at: new Date().toISOString(),
+      reason: 'destroyed',
+    });
+  }
+
+  private recordFailure(
+    owner: WrappedProvider,
+    decision: RouteDecision | undefined,
+    error: unknown,
+    tags: Record<string, string> | undefined,
+  ): void {
+    if (error instanceof Error && error.name === 'AbortError') return;
+    try {
+      this.events?.push({
+        type: 'failed',
+        provider: owner.name,
+        at: new Date().toISOString(),
+        decision_id: decision?.decisionId,
+        failure_class: classifyFailure(error),
+        detail: failureDetail(error),
+        metadata: tags,
+      });
+    } catch (reportFailure) {
+      this.reportError(reportFailure);
+    }
   }
 
   private recordVolume(volume: Volume, owner: WrappedProvider): void {
@@ -596,7 +628,7 @@ function instanceIdOf(instance: InstanceInterface): string | undefined {
 /** ComputeSDK's own check: an instance that ignored a requested egress router is destroyed, not returned. */
 function assertEgressHonored(instance: InstanceInterface, owner: WrappedProvider, options: CreateInstanceOptions): void {
   const egress: unknown = options.egress;
-  if (!isRecord(egress) || Array.isArray(egress) || instance.egress) return;
+  if (!isRecord(egress) || instance.egress) return;
   const instanceId = instanceIdOf(instance);
   if (instanceId !== undefined) owner.instances.destroy(instanceId).catch(() => {});
   throw new Error(`egress: provider "${owner.name}" does not support the "egress" option`);
@@ -613,10 +645,6 @@ const MAX_TIMER_MS = 2_147_483_647;
 function durationOption(value: number | undefined, fallback: number): number {
   if (value === undefined || !Number.isFinite(value) || value < 0) return fallback;
   return Math.min(value, MAX_TIMER_MS);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
 }
 
 /** A throwing or rejecting onError must never reach a sandbox call. */

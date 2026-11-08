@@ -56,6 +56,43 @@ On edge runtimes such as Cloudflare Workers, background work stops when the resp
 
 A sandbox that ends without `destroy()`, for example when the vendor's own timeout stops it, is not reported as stopped.
 
+A create that a provider refuses is reported as a failed start, with the provider, a failure class (`auth`, `quota`, `capacity`, `timeout` or `other`) and the provider's error message, so CostGraph can rank providers on how often they start for you. A create you abort is not reported.
+
+## Run on your team's CostGraph connections
+
+When the sandbox accounts are connected on CostGraph's Integrations page, `costgraphConnections()` runs sandboxes on them without any vendor key in your process. Use it when you build for a team that connected its own accounts, with an API key or a Sign in with CostGraph access token that carries the `sandbox:run` scope.
+
+```ts
+import { compute } from 'computesdk';
+import { costgraphConnections } from '@costgraph/computesdk';
+
+compute.setConfig({
+  provider: costgraphConnections({ apiKey: process.env.COSTGRAPH_API_KEY, policy: 'cheapest' }),
+});
+
+const sandbox = await compute.instances.create({ sizeClass: 'md', metadata: { agent: 'researcher' } });
+const { stdout, truncated } = await sandbox.runCommand('python3 task.py', { timeout: 120_000 });
+await sandbox.filesystem.writeFile('/tmp/input.json', JSON.stringify(input));
+const report = await sandbox.filesystem.readFile('/tmp/report.md');
+await sandbox.destroy();
+```
+
+- CostGraph picks the provider by the team's routing policy, or by `policy` when you set it, and tries the next provider when a create fails. Pass `provider` to always use one provider.
+- Sandboxes are recorded on the team's AutoPilot sandboxes view with their cost, and the provider's own lifecycle ends them; `timeout` on `create()` is passed to the provider.
+- `runCommand` returns at most 256 KiB of each output stream, with `truncated: true` when it cut one. `background: true` returns at once.
+- `runCommand`, `filesystem.readFile`, `filesystem.writeFile`, `getInfo` and `destroy` are available. Other instance methods, snapshots and volumes are not.
+- `instances.list()` returns the running sandboxes created through the API or the CostGraph MCP, and `getById` finds one of them. Workflow and CI sandboxes are not reachable here.
+
+| Option | Default | Description |
+|---|---|---|
+| `apiKey` | none | A CostGraph API key with the `sandbox:run` scope. Set this or `accessToken`. |
+| `accessToken` | none | A Sign in with CostGraph access token, sent as `Authorization: Bearer`. |
+| `baseUrl` | `https://api.costgraph.ai` | CostGraph API address. |
+| `tenantId` | none | Sent as the `X-CostGraph-Tenant-ID` header. |
+| `policy` | team policy | `cheapest`, `balanced` or `fastest` for these sandboxes. |
+| `provider` | none | Always create on this connected provider, for example `e2b`. |
+| `fetch` | global `fetch` | Custom `fetch` implementation. |
+
 ## How a provider is chosen
 
 - With `sizeClass`, CostGraph picks the cheapest of your providers that supports that size (see [Sizes](#sizes)). If none of your providers supports it, `create()` throws the same `InstanceSizeError` that ComputeSDK throws without CostGraph.
@@ -160,6 +197,7 @@ Only these are sent to CostGraph:
 - the names of your providers, such as `e2b` and `daytona`
 - the size class of each create, or the vCPUs and memory a provider actually received when its nearest size is larger
 - for each sandbox: provider name, sandbox ID, start and stop times, and the routing decision ID
+- for each create a provider refuses: provider name, time, failure class and the provider's error message, cut to 2,000 bytes
 - the `metadata` you pass to `create()`: string values only, at most 20 keys, keys up to 64 bytes, values cut to 256 bytes
 
 Vendor keys, code, commands, environment variables, files and output are never sent.
@@ -168,7 +206,7 @@ Reports are sent in batches of up to 100, at least every 2 seconds. Failed sends
 
 ## Other languages
 
-The package is a thin client of two REST endpoints. From Python or any other language, call them directly. Responses wrap their payload in `data`.
+With your own keys, the package is a thin client of two REST endpoints. From Python or any other language, call them directly. Responses wrap their payload in `data`.
 
 Choose a provider:
 
@@ -210,10 +248,20 @@ curl https://api.costgraph.ai/api/v1/tenant/sandboxes/events \
         "size_class": "md",
         "metadata": { "agent": "researcher", "run": "run-42", "customer": "acme" }
       },
-      { "type": "stopped", "provider": "daytona", "sandbox_id": "sbx_123", "at": "2026-11-05T12:07:30Z" }
+      { "type": "stopped", "provider": "daytona", "sandbox_id": "sbx_123", "at": "2026-11-05T12:07:30Z", "reason": "destroyed" },
+      {
+        "type": "failed",
+        "provider": "e2b",
+        "at": "2026-11-05T11:59:57Z",
+        "decision_id": "6f1c2a9e-0b7d-4c41-9a53-2f7f4f0f9b11",
+        "failure_class": "capacity",
+        "detail": "no capacity in region"
+      }
     ]
   }'
 ```
+
+A `failed` event needs no `sandbox_id`.
 
 When a sandbox's size is not one of the standard sizes, send `vcpus` and `memory_mib` in the `started` event instead of `size_class`.
 
