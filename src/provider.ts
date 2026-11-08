@@ -25,6 +25,24 @@ import { applySizeOptions, isExactSize, mapSize, type SupportedSizeMapping } fro
 export const PROVIDER_NAME = 'costgraph';
 export const DEFAULT_BASE_URL = 'https://api.costgraph.ai';
 const DEFAULT_ROUTE_TIMEOUT_MS = 300;
+const RUN_KEY_LABEL = 'costgraph.ai/run';
+const METADATA_FORWARDING_PROVIDERS: ReadonlySet<string> = new Set([
+  'createos-sandbox',
+  'daytona',
+  'e2b',
+  'freestyle',
+  'gravixlayer',
+  'lizard',
+  'microsandbox',
+  'miosa',
+  'novita',
+  'opencomputer',
+  'promigence',
+  'runloop',
+  'sprites',
+  'superserve',
+  'tenki',
+]);
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 
 /** The provider shape `compute.setConfig({ provider })` accepts. */
@@ -178,7 +196,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
       let instance: InstanceInterface;
       try {
         instance = await target.instances
-          .create(sizeMapping ? applySizeOptions(createOptions, sizeMapping) : createOptions)
+          .create(withVendorRunKey(target.name, sizeMapping ? applySizeOptions(createOptions, sizeMapping) : createOptions, tags?.run))
           .catch((error: unknown) => {
             this.recordFailure(target, decision, error, tags);
             throw error;
@@ -593,6 +611,17 @@ function startedSize(sizeClass: InstanceSizeClass | undefined, sizeMapping: Supp
   if (sizeClass === undefined) return {};
   if (!sizeMapping || isExactSize(sizeMapping, getInstanceSizeProfile(sizeClass))) return { size_class: sizeClass };
   return { vcpus: sizeMapping.vcpus, memory_mib: sizeMapping.memoryMiB };
+}
+
+function withVendorRunKey(provider: string, options: CreateInstanceOptions, run: string | undefined): CreateInstanceOptions {
+  if (run === undefined) return options;
+  const metadata = isRecord(options.metadata) ? options.metadata : {};
+  if (provider === 'blaxel') {
+    const labels = isRecord(metadata.labels) ? metadata.labels : {};
+    return { ...options, metadata: { ...metadata, labels: { ...labels, [RUN_KEY_LABEL]: run } } };
+  }
+  if (!METADATA_FORWARDING_PROVIDERS.has(provider)) return options;
+  return { ...options, metadata: { ...metadata, [RUN_KEY_LABEL]: run } };
 }
 
 function isUnresolvedStatus(code: string): code is UnresolvedSizeStatus {

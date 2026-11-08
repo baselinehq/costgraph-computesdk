@@ -62,6 +62,8 @@ A create that a provider refuses is reported as a failed start, with the provide
 
 Every sandbox is recorded with a run key, the `run` value in its `metadata`. Pass your own run ID as `metadata.run` to group the sandboxes of one agent run; without one, CostGraph generates a key per sandbox. Read it back with `runKey(sandboxId)` and send it with that run's model calls through your AI gateway, so the run's sandbox and token cost add up to one total.
 
+The run key is also set on the sandbox at the vendor as `costgraph.ai/run`, in the vendor's metadata or labels, for providers whose ComputeSDK adapter passes them on: Blaxel (labels), CreateOS, Daytona (labels), E2B, Freestyle, GravixLayer, Lizard, Microsandbox, Miosa, Novita, OpenComputer, Promigence, Runloop, Sprites, Superserve and Tenki. No other CostGraph field is sent to the vendor.
+
 ```ts
 const sandbox = await compute.instances.create({ metadata: { agent: 'researcher' } });
 const run = cg.runKey(sandbox.instanceId);
