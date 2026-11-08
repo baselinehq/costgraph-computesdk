@@ -1,5 +1,5 @@
 import type { InstanceSizeClass } from 'computesdk';
-import { CostGraphApiError, discardBody, errorMessage, unrefTimer, type CostGraphApi } from './api.js';
+import { CostGraphApiError, discardBody, errorMessage, isRecord, unrefTimer, type CostGraphApi } from './api.js';
 
 const EVENTS_PATH = '/api/v1/tenant/sandboxes/events';
 const BATCH_SIZE = 100;
@@ -13,12 +13,14 @@ const DEFAULT_FLUSH_TIMEOUT_MS = 10_000;
 const MAX_METADATA_KEYS = 20;
 const MAX_METADATA_KEY_BYTES = 64;
 const MAX_METADATA_VALUE_BYTES = 256;
+const MAX_FAILURE_DETAIL_BYTES = 2_000;
 
 export interface StartedEvent {
   readonly type: 'started';
   readonly provider: string;
   readonly sandbox_id: string;
   readonly at: string;
+  readonly create_requested_at: string;
   readonly decision_id?: string;
   readonly size_class?: InstanceSizeClass;
   readonly vcpus?: number;
@@ -33,9 +35,22 @@ export interface StoppedEvent {
   readonly provider: string;
   readonly sandbox_id: string;
   readonly at: string;
+  readonly reason: 'destroyed';
 }
 
-export type SandboxEvent = StartedEvent | StoppedEvent;
+export type FailureClass = 'quota' | 'capacity' | 'auth' | 'timeout' | 'other';
+
+export interface FailedEvent {
+  readonly type: 'failed';
+  readonly provider: string;
+  readonly at: string;
+  readonly decision_id?: string;
+  readonly failure_class: FailureClass;
+  readonly detail: string;
+  readonly metadata?: Readonly<Record<string, string>>;
+}
+
+export type SandboxEvent = StartedEvent | StoppedEvent | FailedEvent;
 
 export class EventReporter {
   private queue: SandboxEvent[] = [];
@@ -159,6 +174,36 @@ export function sanitizeMetadata(metadata: unknown): Record<string, string> | un
     entries.push([key, truncateUtf8(value, MAX_METADATA_VALUE_BYTES)]);
   }
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+export function withRunKey(metadata: unknown): Record<string, string> | undefined {
+  const source = isRecord(metadata) ? metadata : {};
+  const run = typeof source.run === 'string' && source.run.length > 0 ? source.run : globalThis.crypto?.randomUUID?.();
+  return sanitizeMetadata(run === undefined ? source : Object.assign({ run }, source, { run }));
+}
+
+interface ProviderError {
+  readonly name?: unknown;
+  readonly message?: unknown;
+  readonly status?: unknown;
+  readonly statusCode?: unknown;
+  readonly response?: { readonly status?: unknown };
+  readonly $metadata?: { readonly httpStatusCode?: unknown };
+}
+
+export function classifyFailure(error: unknown): FailureClass {
+  const { name, message, status, statusCode, response, $metadata } = (error ?? {}) as ProviderError;
+  const code = status ?? statusCode ?? response?.status ?? $metadata?.httpStatusCode;
+  const text = typeof message === 'string' ? message : String(error);
+  if (code === 401 || code === 403 || name === 'AuthenticationError') return 'auth';
+  if (code === 429 || /quota|rate.?limit/i.test(text)) return 'quota';
+  if (/capacity/i.test(text)) return 'capacity';
+  if (name === 'TimeoutError' || /timed? ?out/i.test(text)) return 'timeout';
+  return 'other';
+}
+
+export function failureDetail(error: unknown): string {
+  return truncateUtf8(errorMessage(error), MAX_FAILURE_DETAIL_BYTES);
 }
 
 const encoder = new TextEncoder();

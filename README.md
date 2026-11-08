@@ -56,11 +56,62 @@ On edge runtimes such as Cloudflare Workers, background work stops when the resp
 
 A sandbox that ends without `destroy()`, for example when the vendor's own timeout stops it, is not reported as stopped.
 
+A create that a provider refuses is reported as a failed start, with the provider, a failure class (`auth`, `quota`, `capacity`, `timeout` or `other`) and the provider's error message, so CostGraph can rank providers on how often they start for you. A create you abort is not reported.
+
+### Run key
+
+Every sandbox is recorded with a run key, the `run` value in its `metadata`. Pass your own run ID as `metadata.run` to group the sandboxes of one agent run; without one, CostGraph generates a key per sandbox. Read it back with `runKey(sandboxId)` and send it with that run's model calls through your AI gateway, so the run's sandbox and token cost add up to one total.
+
+The run key is also set on the sandbox at the vendor as `costgraph.ai/run`, in the vendor's metadata or labels, for providers whose ComputeSDK adapter passes them on: Blaxel (labels), CreateOS, Daytona (labels), E2B, Freestyle, GravixLayer, Lizard, Microsandbox, Miosa, Novita, OpenComputer, Promigence, Runloop, Sprites, Superserve and Tenki. No other CostGraph field is sent to the vendor.
+
+```ts
+const sandbox = await compute.instances.create({ metadata: { agent: 'researcher' } });
+const run = cg.runKey(sandbox.instanceId);
+```
+
+## Run on your team's CostGraph connections
+
+When the sandbox accounts are connected on CostGraph's Integrations page, `costgraphConnections()` runs sandboxes on them without any vendor key in your process. Use it when you build for a team that connected its own accounts, with an API key that carries the `sandbox:run` scope, or a Sign in with CostGraph access token that can use the CostGraph MCP tools.
+
+```ts
+import { compute } from 'computesdk';
+import { costgraphConnections } from '@costgraph/computesdk';
+
+compute.setConfig({
+  provider: costgraphConnections({ apiKey: process.env.COSTGRAPH_API_KEY, policy: 'cheapest' }),
+});
+
+const sandbox = await compute.instances.create({ sizeClass: 'md', metadata: { agent: 'researcher' } });
+const { stdout, truncated } = await sandbox.runCommand('python3 task.py', { timeout: 120_000 });
+await sandbox.filesystem.writeFile('/tmp/input.json', JSON.stringify(input));
+const report = await sandbox.filesystem.readFile('/tmp/report.md');
+await sandbox.destroy();
+```
+
+- CostGraph picks the provider by the team's routing policy, or by `policy` when you set it, and tries the next provider when a create fails. Pass `provider` to always use one provider.
+- Sandboxes are recorded on the team's AutoPilot sandboxes view with their cost, and the provider's own lifecycle ends them; `timeout` on `create()` is passed to the provider.
+- `runCommand` returns at most 256 KiB of each output stream, with `truncated: true` when it cut one. `background: true` returns at once.
+- A command waits at most 55 seconds. A `timeout` above 55,000 ms throws unless you pass `background: true`, which starts the command and returns at once.
+- `metadata` holds at most 16 tags, including the run key, so 15 of your own tags plus a generated run key, or 16 when you set `metadata.run` yourself. A create with more throws before anything is sent.
+- `runCommand`, `filesystem.readFile`, `filesystem.writeFile`, `getInfo` and `destroy` are available. Other instance methods, snapshots and volumes are not.
+- `instances.list()` returns the running sandboxes created through the API or the CostGraph MCP, and `getById` finds one of them. Workflow and CI sandboxes are not reachable here.
+
+| Option | Default | Description |
+|---|---|---|
+| `apiKey` | none | A CostGraph API key with the `sandbox:run` scope. Set this or `accessToken`. |
+| `accessToken` | none | A Sign in with CostGraph access token that can use the CostGraph MCP tools, sent as `Authorization: Bearer`. |
+| `baseUrl` | `https://api.costgraph.ai` | CostGraph API address. |
+| `tenantId` | none | Sent as the `X-CostGraph-Tenant-ID` header. |
+| `policy` | team policy | `cheapest`, `balanced` or `fastest` for these sandboxes. |
+| `provider` | none | Always create on this connected provider, for example `e2b`. |
+| `fetch` | global `fetch` | Custom `fetch` implementation. |
+
 ## How a provider is chosen
 
 - With `sizeClass`, CostGraph picks the cheapest of your providers that supports that size (see [Sizes](#sizes)). If none of your providers supports it, `create()` throws the same `InstanceSizeError` that ComputeSDK throws without CostGraph.
 - Without `sizeClass`, each provider creates its own default size, so prices are not comparable. The sandbox goes to the first provider in your list, and CostGraph still records its start and stop.
-- A create waits at most `routeTimeoutMs` (300 ms by default) for an answer. If CostGraph is slow, unreachable or returns an error, the sandbox is created in the order of your `providers` list, as ComputeSDK does today. CostGraph problems never make a create fail.
+- A create waits at most `routeTimeoutMs` (300 ms by default) for an answer. If CostGraph is slow, unreachable or returns an error, the sandbox is created in the order of your `providers` list, as ComputeSDK does today. Unless your team enforces a budget, CostGraph problems never make a create fail.
+- When your team enforces a budget and that budget is over, `create()` creates nothing and throws an error that names the budget. While a budget is enforced, every create checks it, including creates with one provider or a pinned `provider`. A create then waits up to 5 seconds for the answer, and if CostGraph is slow, unreachable or returns an error, `create()` throws "CostGraph could not check the team's budget, so no sandbox was created" instead of using list order. Nothing is reported for a create that was refused.
 - Answers are reused for `cacheTtlMs` (5 minutes by default) per size class and provider list, so most creates make no extra call.
 - If the chosen provider fails, the next one is tried only when ComputeSDK would try it: never for a create with `sizeClass`, never after an abort, never for an error the provider marks as not safe to retry, and never when `fallbackOnError` is `false`. Otherwise the next provider in CostGraph's order is tried, followed by any of your providers that the answer did not list.
 - An answer that arrives after the timeout is still kept for the next create. After a failed call, creates use list order for 30 seconds before asking again.
@@ -159,8 +210,9 @@ Only these are sent to CostGraph:
 - your CostGraph API key, in the `X-API-Key` header
 - the names of your providers, such as `e2b` and `daytona`
 - the size class of each create, or the vCPUs and memory a provider actually received when its nearest size is larger
-- for each sandbox: provider name, sandbox ID, start and stop times, and the routing decision ID
-- the `metadata` you pass to `create()`: string values only, at most 20 keys, keys up to 64 bytes, values cut to 256 bytes
+- for each sandbox: provider name, sandbox ID, the time the create was sent to the provider, start and stop times, and the routing decision ID
+- for each create a provider refuses: provider name, time, failure class and the provider's error message, cut to 2,000 bytes
+- the `metadata` you pass to `create()`, with the run key: string values only, at most 20 keys, keys up to 64 bytes, values cut to 256 bytes
 
 Vendor keys, code, commands, environment variables, files and output are never sent.
 
@@ -168,7 +220,7 @@ Reports are sent in batches of up to 100, at least every 2 seconds. Failed sends
 
 ## Other languages
 
-The package is a thin client of two REST endpoints. From Python or any other language, call them directly. Responses wrap their payload in `data`.
+With your own keys, the package is a thin client of two REST endpoints. From Python or any other language, call them directly. Responses wrap their payload in `data`.
 
 Choose a provider:
 
@@ -206,14 +258,25 @@ curl https://api.costgraph.ai/api/v1/tenant/sandboxes/events \
         "provider": "daytona",
         "sandbox_id": "sbx_123",
         "at": "2026-11-05T12:00:00Z",
+        "create_requested_at": "2026-11-05T11:59:58Z",
         "decision_id": "6f1c2a9e-0b7d-4c41-9a53-2f7f4f0f9b11",
         "size_class": "md",
         "metadata": { "agent": "researcher", "run": "run-42", "customer": "acme" }
       },
-      { "type": "stopped", "provider": "daytona", "sandbox_id": "sbx_123", "at": "2026-11-05T12:07:30Z" }
+      { "type": "stopped", "provider": "daytona", "sandbox_id": "sbx_123", "at": "2026-11-05T12:07:30Z", "reason": "destroyed" },
+      {
+        "type": "failed",
+        "provider": "e2b",
+        "at": "2026-11-05T11:59:57Z",
+        "decision_id": "6f1c2a9e-0b7d-4c41-9a53-2f7f4f0f9b11",
+        "failure_class": "capacity",
+        "detail": "no capacity in region"
+      }
     ]
   }'
 ```
+
+`create_requested_at` is when the create was sent to the provider, so CostGraph can measure how long the provider took to start it. A `failed` event needs no `sandbox_id`.
 
 When a sandbox's size is not one of the standard sizes, send `vcpus` and `memory_mib` in the `started` event instead of `size_class`.
 
