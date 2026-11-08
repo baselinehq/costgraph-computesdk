@@ -91,6 +91,8 @@ await sandbox.destroy();
 - CostGraph picks the provider by the team's routing policy, or by `policy` when you set it, and tries the next provider when a create fails. Pass `provider` to always use one provider.
 - Sandboxes are recorded on the team's AutoPilot sandboxes view with their cost, and the provider's own lifecycle ends them; `timeout` on `create()` is passed to the provider.
 - `runCommand` returns at most 256 KiB of each output stream, with `truncated: true` when it cut one. `background: true` returns at once.
+- A command waits at most 55 seconds. A `timeout` above 55,000 ms throws unless you pass `background: true`, which starts the command and returns at once.
+- `metadata` holds at most 16 tags, including the run key, so 15 of your own tags plus a generated run key, or 16 when you set `metadata.run` yourself. A create with more throws before anything is sent.
 - `runCommand`, `filesystem.readFile`, `filesystem.writeFile`, `getInfo` and `destroy` are available. Other instance methods, snapshots and volumes are not.
 - `instances.list()` returns the running sandboxes created through the API or the CostGraph MCP, and `getById` finds one of them. Workflow and CI sandboxes are not reachable here.
 

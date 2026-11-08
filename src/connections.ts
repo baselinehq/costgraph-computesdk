@@ -16,6 +16,8 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const CREATE_TIMEOUT_MS = 300_000;
 const DEFAULT_EXEC_TIMEOUT_MS = 300_000;
 const BASE64_CHUNK = 0x8000;
+const MAX_TAGS = 16;
+const MAX_FOREGROUND_EXEC_MS = 55_000;
 
 type InstanceManager = Required<NonNullable<DirectProvider['instances']>>;
 
@@ -81,6 +83,7 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
 
   private async create(options: CreateInstanceOptions = {}): Promise<InstanceInterface> {
     if (hasInstanceSizeRequest(options)) validateInstanceSizeOptions(options);
+    assertTagLimit(options.metadata);
     const metadata = withRunKey(options.metadata);
     const data = await this.api.post(
       SANDBOXES_PATH,
@@ -190,11 +193,15 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
   }
 
   private async runCommand(path: string, command: string, options: RunCommandOptions = {}): Promise<CommandOutput> {
+    const longTimeout = options.timeout !== undefined && options.timeout > MAX_FOREGROUND_EXEC_MS;
+    if (longTimeout && !options.background) {
+      throw new RangeError('Commands longer than 55 s must run in the background: pass { background: true } to runCommand');
+    }
     const started = Date.now();
     const waitMs = options.background ? REQUEST_TIMEOUT_MS : (options.timeout ?? DEFAULT_EXEC_TIMEOUT_MS) + REQUEST_TIMEOUT_MS;
     const data = await this.api.post(
       `${path}/exec`,
-      { command, cwd: options.cwd, env: options.env, timeout_ms: options.timeout, background: options.background },
+      { command, cwd: options.cwd, env: options.env, timeout_ms: longTimeout ? undefined : options.timeout, background: options.background },
       waitMs,
       readRecord,
     );
@@ -209,6 +216,14 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
       durationMs: Date.now() - started,
       truncated: data.truncated === true,
     };
+  }
+}
+
+function assertTagLimit(metadata: unknown): void {
+  const keys = isRecord(metadata) ? Object.keys(metadata) : [];
+  const tags = keys.includes('run') ? keys.length : keys.length + 1;
+  if (tags > MAX_TAGS) {
+    throw new RangeError(`metadata holds at most ${MAX_TAGS} tags including the run key; this create has ${tags}`);
   }
 }
 
