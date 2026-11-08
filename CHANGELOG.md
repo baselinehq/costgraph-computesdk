@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0](https://github.com/baselinehq/costgraph-computesdk/compare/v0.0.2...v0.1.0) (2026-11-08)
+
+
+### Added
+
+* run sandboxes on CostGraph connections and report failures and run keys ([#12](https://github.com/baselinehq/costgraph-computesdk/issues/12)) ([3c8e643](https://github.com/baselinehq/costgraph-computesdk/commit/3c8e643063f28c551011c9fa87fe8365817160ad))
+
 ## 0.0.2 (2026-11-06)
 
 
