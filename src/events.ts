@@ -1,5 +1,5 @@
 import type { InstanceSizeClass } from 'computesdk';
-import { CostGraphApiError, discardBody, errorMessage, unrefTimer, type CostGraphApi } from './api.js';
+import { CostGraphApiError, discardBody, errorMessage, isRecord, unrefTimer, type CostGraphApi } from './api.js';
 
 const EVENTS_PATH = '/api/v1/tenant/sandboxes/events';
 const BATCH_SIZE = 100;
@@ -174,6 +174,12 @@ export function sanitizeMetadata(metadata: unknown): Record<string, string> | un
     entries.push([key, truncateUtf8(value, MAX_METADATA_VALUE_BYTES)]);
   }
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+export function withRunKey(metadata: unknown): Record<string, string> | undefined {
+  const source = isRecord(metadata) ? metadata : {};
+  const run = typeof source.run === 'string' && source.run.length > 0 ? source.run : globalThis.crypto?.randomUUID?.();
+  return sanitizeMetadata(run === undefined ? source : Object.assign({ run }, source, { run }));
 }
 
 interface ProviderError {

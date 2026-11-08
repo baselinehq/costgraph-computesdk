@@ -58,6 +58,15 @@ A sandbox that ends without `destroy()`, for example when the vendor's own timeo
 
 A create that a provider refuses is reported as a failed start, with the provider, a failure class (`auth`, `quota`, `capacity`, `timeout` or `other`) and the provider's error message, so CostGraph can rank providers on how often they start for you. A create you abort is not reported.
 
+### Run key
+
+Every sandbox is recorded with a run key, the `run` value in its `metadata`. Pass your own run ID as `metadata.run` to group the sandboxes of one agent run; without one, CostGraph generates a key per sandbox. Read it back with `runKey(sandboxId)` and send it with that run's model calls through your AI gateway, so the run's sandbox and token cost add up to one total.
+
+```ts
+const sandbox = await compute.instances.create({ metadata: { agent: 'researcher' } });
+const run = cg.runKey(sandbox.instanceId);
+```
+
 ## Run on your team's CostGraph connections
 
 When the sandbox accounts are connected on CostGraph's Integrations page, `costgraphConnections()` runs sandboxes on them without any vendor key in your process. Use it when you build for a team that connected its own accounts, with an API key or a Sign in with CostGraph access token that carries the `sandbox:run` scope.
@@ -198,7 +207,7 @@ Only these are sent to CostGraph:
 - the size class of each create, or the vCPUs and memory a provider actually received when its nearest size is larger
 - for each sandbox: provider name, sandbox ID, the time the create was sent to the provider, start and stop times, and the routing decision ID
 - for each create a provider refuses: provider name, time, failure class and the provider's error message, cut to 2,000 bytes
-- the `metadata` you pass to `create()`: string values only, at most 20 keys, keys up to 64 bytes, values cut to 256 bytes
+- the `metadata` you pass to `create()`, with the run key: string values only, at most 20 keys, keys up to 64 bytes, values cut to 256 bytes
 
 Vendor keys, code, commands, environment variables, files and output are never sent.
 

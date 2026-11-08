@@ -8,7 +8,7 @@ import {
   type RunCommandOptions,
 } from 'computesdk';
 import { CostGraphApi, CostGraphApiError, discardBody, isRecord, readData, type FetchFunction } from './api.js';
-import { sanitizeMetadata } from './events.js';
+import { withRunKey } from './events.js';
 import { DEFAULT_BASE_URL, PROVIDER_NAME, type DirectProvider } from './provider.js';
 
 const SANDBOXES_PATH = '/api/v1/tenant/sandboxes';
@@ -34,6 +34,7 @@ export interface CostGraphConnectionsOptions {
 export interface CostGraphConnectionsProvider {
   readonly name: typeof PROVIDER_NAME;
   readonly instances: InstanceManager;
+  runKey(sandboxId: string): string | undefined;
 }
 
 export type CommandOutput = CommandResult & { readonly truncated: boolean };
@@ -56,6 +57,7 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
 
   private readonly api: CostGraphApi;
   private readonly providers = new Map<string, string>();
+  private readonly runKeys = new Map<string, string>();
 
   constructor(private readonly options: CostGraphConnectionsOptions) {
     this.api = new CostGraphApi({
@@ -73,9 +75,13 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
     };
   }
 
+  runKey(sandboxId: string): string | undefined {
+    return this.runKeys.get(sandboxId);
+  }
+
   private async create(options: CreateInstanceOptions = {}): Promise<InstanceInterface> {
     if (hasInstanceSizeRequest(options)) validateInstanceSizeOptions(options);
-    const metadata = sanitizeMetadata(options.metadata);
+    const metadata = withRunKey(options.metadata);
     const data = await this.api.post(
       SANDBOXES_PATH,
       {
@@ -88,7 +94,7 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
       CREATE_TIMEOUT_MS,
       readRecord,
     );
-    return this.adopt(sandboxRefOf(data));
+    return this.adopt(sandboxRefOf(data), metadata?.run);
   }
 
   private async getById(sandboxId: string): Promise<InstanceInterface | null> {
@@ -110,7 +116,11 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
   private async list(): Promise<InstanceInterface[]> {
     const data = await this.api.get(SANDBOXES_PATH, REQUEST_TIMEOUT_MS, readData);
     if (!Array.isArray(data)) throw new CostGraphApiError('sandbox list response is not a list');
-    return data.map((row: unknown) => this.adopt(sandboxRefOf(asRecord(row))));
+    return data.map((row: unknown) => {
+      const record = asRecord(row);
+      const run = isRecord(record.metadata) ? record.metadata.run : undefined;
+      return this.adopt(sandboxRefOf(record), typeof run === 'string' ? run : undefined);
+    });
   }
 
   private async destroy(sandboxId: string): Promise<void> {
@@ -129,13 +139,15 @@ class ConnectionsProvider implements CostGraphConnectionsProvider {
     return this.providers.get(sandboxId);
   }
 
-  private adopt(ref: SandboxRef): InstanceInterface {
+  private adopt(ref: SandboxRef, runKey: string | undefined): InstanceInterface {
     this.providers.set(ref.sandboxId, ref.provider);
+    if (runKey) this.runKeys.set(ref.sandboxId, runKey);
     return this.instance(ref);
   }
 
   private forget(sandboxId: string): void {
     this.providers.delete(sandboxId);
+    this.runKeys.delete(sandboxId);
   }
 
   private instance(ref: SandboxRef): InstanceInterface {

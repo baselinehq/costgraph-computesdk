@@ -18,7 +18,7 @@ import {
   type Volume,
 } from 'computesdk';
 import { CostGraphApi, errorMessage, isRecord, type FetchFunction } from './api.js';
-import { EventReporter, classifyFailure, failureDetail, sanitizeMetadata, type StartedSize } from './events.js';
+import { EventReporter, classifyFailure, failureDetail, withRunKey, type StartedSize } from './events.js';
 import { Router, orderByDecision, type RouteDecision } from './router.js';
 import { applySizeOptions, isExactSize, mapSize, type SupportedSizeMapping } from './sizes.js';
 
@@ -64,6 +64,7 @@ export interface CostGraphProvider {
   readonly volume?: VolumeManager;
   /** Sends the queued sandbox events. Await it before the process exits. Resolves within `timeoutMs` (default 10 s) and never rejects. */
   flush(timeoutMs?: number): Promise<void>;
+  runKey(sandboxId: string): string | undefined;
 }
 
 interface WrappedProvider {
@@ -102,6 +103,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
   private readonly instanceOwners = new Map<string, WrappedProvider>();
   private readonly snapshotOwners = new Map<string, WrappedProvider>();
   private readonly volumeOwners = new Map<string, WrappedProvider>();
+  private readonly runKeys = new Map<string, string>();
   private readonly reportError: (error: unknown) => void;
   private readonly router: Router | undefined;
   private readonly events: EventReporter | undefined;
@@ -146,6 +148,10 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     return this.events?.flush(timeoutMs) ?? Promise.resolve();
   }
 
+  runKey(sandboxId: string): string | undefined {
+    return this.runKeys.get(sandboxId);
+  }
+
   private async create(options: CreateInstanceOptions = {}): Promise<InstanceInterface> {
     if (hasInstanceSizeRequest(options)) validateInstanceSizeOptions(options);
     // Same routing-only keys ComputeSDK strips before calling a provider; strict vendors reject them.
@@ -165,7 +171,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
     // Mirrors ComputeSDK: a pinned provider or a defined sizeClass never reroutes after a create attempt.
     const canReroute = this.fallbackOnError && pinned === undefined && sizeClass === undefined;
     const failures: Array<{ provider: WrappedProvider; error: unknown }> = [];
-    const tags = sanitizeMetadata(createOptions.metadata);
+    const tags = withRunKey(createOptions.metadata);
 
     for (const { provider: target, sizeMapping } of ordered) {
       const requestedAt = new Date().toISOString();
@@ -373,6 +379,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
       const instanceId = instanceIdOf(instance);
       if (instanceId === undefined) return instance;
       this.instanceOwners.set(instanceId, owner);
+      if (tags?.run) this.runKeys.set(instanceId, tags.run);
       this.events?.push({
         type: 'started',
         provider: owner.name,
@@ -392,6 +399,7 @@ class CostGraphRoutingProvider implements CostGraphProvider {
 
   private recordStop(owner: WrappedProvider, instanceId: string): void {
     this.instanceOwners.delete(instanceId);
+    this.runKeys.delete(instanceId);
     this.events?.push({
       type: 'stopped',
       provider: owner.name,
